@@ -361,7 +361,7 @@ bool Jtag::insert_first(uint32_t device_id, uint16_t irlength)
 
 int Jtag::device_select(unsigned index)
 {
-	if (index > _devices_list.size())
+	if (index >= _devices_list.size())
 		return -1;
 	device_index = index;
 	/* get number of devices, in the JTAG chain,

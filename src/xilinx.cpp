@@ -1130,8 +1130,15 @@ void Xilinx::program_mem(ConfigBitstreamParser *bitfile)
 		printf("COR0 after JSTART:\n");
 		read_register("COR0");
 
+		printf("STAT after COR0 read:\n");
+		read_register("STAT");
+
 		printf("BOOTSTS after JSTART:\n");
 		read_register("BOOTSTS");
+
+		printf("STAT after BOOTSTS read:\n");
+		read_register("STAT");
+		
 		/*
 		* 23: Move to the TLR state. The device is
 		* now functional.                                    X     1   3
@@ -1340,6 +1347,11 @@ uint32_t Xilinx::dumpRegister(std::string reg_name)
 		0x20000000,  // NOOP
 	};
 
+    printf("\nCFG register read: %s\n", reg_name.c_str());
+    printf("  Register address = 0x%02x\n", regcode);
+    for (int i = 0; i < 5; ++i)
+        printf("  CFG_IN word[%d] = 0x%08x\n", i, cfg_packets[i]);
+	
 	_jtag->go_test_logic_reset();
 	_jtag->set_state(Jtag::RUN_TEST_IDLE);
 	_jtag->shiftIR(get_ircode(_ircode_map, "CFG_IN"), NULL, _irlen, Jtag::SELECT_DR_SCAN);
@@ -1361,6 +1373,8 @@ uint32_t Xilinx::dumpRegister(std::string reg_name)
 
 	_jtag->shiftIR(get_ircode(_ircode_map, "CFG_OUT"), NULL, _irlen, Jtag::SELECT_DR_SCAN);
 	_jtag->shiftDR(dummy, reg, 32);
+	printf("  CFG_OUT bytes = %02x %02x %02x %02x\n",
+		reg[0], reg[1], reg[2], reg[3]);
 	_jtag->go_test_logic_reset();
 
 	uint32_t reg_word = char_array_to_word(reg);

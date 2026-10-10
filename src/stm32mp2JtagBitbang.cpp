@@ -493,8 +493,8 @@ int Stm32mp2JtagBitbang::writeTMS(
 		const int tms =
 			(tms_buf[i >> 3] & (1U << (i & 7U))) ? 1 : 0;
 
-		// clock_cycle(tms, tdi != 0, false, nullptr, 0);
-        clock_cycle(tms, 0, false, nullptr, 0);
+		clock_cycle(tms, tdi != 0, false, nullptr, 0);
+        // clock_cycle(tms, 0, false, nullptr, 0);
 	}
 
 	return static_cast<int>(len);
