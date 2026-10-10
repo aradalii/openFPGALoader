@@ -29,6 +29,10 @@
 #endif
 #ifdef ENABLE_LIBGPIOD
 #include "libgpiodJtagBitbang.hpp"
+#include "stm32mp2GpiodJtagBitbang.hpp"
+#endif
+#ifdef ENABLE_STM32MP2GPIO
+#include "stm32mp2JtagBitbang.hpp"
 #endif
 #ifdef ENABLE_JETSONNANOGPIO
 #include "jetsonNanoJtagBitbang.hpp"
@@ -199,6 +203,18 @@ Jtag::Jtag(const cable_t &cable, const jtag_pins_conf_t *pin_conf,
 #ifdef ENABLE_LIBGPIOD
 	case MODE_LIBGPIOD_BITBANG:
 		_jtag = new LibgpiodJtagBitbang(pin_conf, dev, clkHZ, verbose);
+		break;
+#endif
+#ifdef ENABLE_LIBGPIOD
+    case MODE_STM32MP2_GPIOD:
+        _jtag = new Stm32mp2GpiodJtagBitbang(
+            pin_conf, dev, clkHZ, verbose);
+        break;
+#endif
+#ifdef ENABLE_STM32MP2GPIO
+	case MODE_STM32MP2_BITBANG:
+		_jtag = new Stm32mp2JtagBitbang(
+			pin_conf, dev, clkHZ, verbose);
 		break;
 #endif
 #ifdef ENABLE_JETSONNANOGPIO
@@ -374,6 +390,21 @@ int Jtag::device_select(unsigned index)
 	for (unsigned i = device_index + 1; i < _devices_list.size(); ++i)
 		_ir_bits_before += _irlength_list[i];
 	_ir_bits = std::vector<uint8_t>((std::max(_ir_bits_before, _ir_bits_after) + 7) / 8, 0xff); // BYPASS command is all-ones
+
+	printf("JTAG DEVICE SELECT\n");
+
+	for (size_t i = 0; i < _devices_list.size(); ++i) {
+		printf("  [%zu] IDCODE=0x%08x IR=%u%s\n",
+			i,
+			_devices_list[i],
+			_irlength_list[i],
+			i == device_index ? " <-- ACTIVE" : "");
+	}
+
+	printf("  DR before = %d\n", _dr_bits_before);
+	printf("  DR after  = %d\n", _dr_bits_after);
+	printf("  IR before = %d\n", _ir_bits_before);
+	printf("  IR after  = %d\n", _ir_bits_after);
 
 	return device_index;
 }

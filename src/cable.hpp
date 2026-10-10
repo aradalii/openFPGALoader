@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+    // SPDX-License-Identifier: Apache-2.0
 /*
  * Copyright (C) 2019 Gwenhael Goavec-Merou <gwenhael.goavec-merou@trabucayre.com>
  */
@@ -25,6 +25,8 @@ enum communication_type {
 	MODE_DFU,              /*! DFU based probe */
 	MODE_XVC_CLIENT,       /*! Xilinx Virtual Cable client */
 	MODE_LIBGPIOD_BITBANG, /*! Bitbang gpio pins */
+    MODE_STM32MP2_GPIOD,   /*! Bitbang gpiod pins */
+	MODE_STM32MP2_BITBANG, /*! Bitbang gpio pins */
 	MODE_JETSONNANO_BITBANG, /*! Bitbang gpio pins */
 	MODE_REMOTEBITBANG,    /*! Remote Bitbang mode */
 	MODE_CH347,            /*! CH347 JTAG mode */
@@ -145,6 +147,10 @@ static std::map <std::string, cable_t> cable_list = {
 	{"xvc-client",         CABLE_DEF(MODE_XVC_CLIENT, 0x0000, 0x0000                   )},
 #ifdef ENABLE_LIBGPIOD
 	{"libgpiod",           CABLE_DEF(MODE_LIBGPIOD_BITBANG, 0, 0x0000                  )},
+	{"stm32mp2-gpiod",     CABLE_DEF(MODE_STM32MP2_GPIOD, 0, 0x0000                    )},
+#endif
+#ifdef ENABLE_STM32MP2GPIO
+	{"stm32mp2-gpio",      {MODE_STM32MP2_BITBANG, {}}},
 #endif
 #ifdef ENABLE_JETSONNANOGPIO
 	{"jetson-nano-gpio",   {MODE_JETSONNANO_BITBANG, {}}},

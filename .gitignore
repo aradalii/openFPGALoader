@@ -48,3 +48,7 @@ build/
 
 # VSCode local settings directory
 /.vscode/
+
+/build*
+*/build*
+

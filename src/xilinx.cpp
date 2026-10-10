@@ -156,6 +156,26 @@ static std::map<std::string, std::map<std::string, std::vector<uint8_t>>>
 			}
 		},
 		{
+			/* Xilinx Zynq UltraScale+ MPSoC / UltraScale family */
+			"zynqmp",
+			{
+				{ "USER1",       {0x02} },
+				{ "USER2",       {0x03} },
+				{ "CFG_OUT",    {0x04} },
+				{ "CFG_IN",     {0x05} },
+				{ "STATUS",     {0x07} },
+				{ "USERCODE",   {0x08} },
+				{ "IDCODE",     {0x09} },
+				{ "JPROGRAM",   {0x0B} },
+				{ "JSTART",     {0x0C} },
+				{ "JSHUTDOWN", {0x0D} },
+				{ "ISC_ENABLE", {0x10} },
+				{ "ISC_PROGRAM",{0x11} },
+				{ "ISC_DISABLE",{0x16} },
+				{ "BYPASS",     {0x3F} },
+			}
+		},
+		{
 			/* Xilinx Virtex UltraScale+ */
 			/* <vivado_dir>/data/parts/xilinx/virtexuplus/public/bsdl/xcvu9p_flga2104.bsd */
                         /* SLR1 is the master SLR  */
@@ -538,64 +558,88 @@ Xilinx::~Xilinx() {}
 
 bool Xilinx::zynqmp_init(const std::string &family)
 {
-	/* by default, at powering a zynqmp has
-	 * PL TAP and ARM DAP disabled
-	 * at this time only PS TAB and a dummy are seen
-	 * So first step is to enable PL and ARM
-	 */
-	if (family == "zynqmp_cfgn") {
-		/* PS TAP is the first device with 0xfffffe idcode */
-		_jtag->device_select(0);
-		/* send 0x03 into JTAG_CTRL register */
-		uint16_t ircode = 0x824;
-		_jtag->shiftIR(ircode & 0xff, 8, Jtag::SHIFT_IR);
-		_jtag->shiftIR((ircode >> 8) & 0x0f, 4);
-		uint8_t instr[4] = {0x3, 0, 0, 0};
-		_jtag->shiftDR(instr, NULL, 32);
-		/* synchronize everything by moving to TLR */
-		_jtag->set_state(Jtag::TEST_LOGIC_RESET);
-		_jtag->toggleClk(10);
-		_jtag->set_state(Jtag::RUN_TEST_IDLE);
-		_jtag->toggleClk(100);
-		/* force again JTAG chain detection */
-		_jtag->detectChain(5);
-	}
-	/* check if the chain is correctly configured:
-	 * 2 devices
-	 * PL at position 0
-	 * ARM at position 1
-	 */
-	char mess[256];
-	std::vector<uint32_t> listDev = _jtag->get_devices_list();
-	if (listDev.size() != 2) {
-		snprintf(mess, sizeof(mess), "ZynqMP error: wrong"
-				" JTAG length: %zu instead of 2\n",
-				listDev.size());
-		printError(mess);
-		return false;
-	}
+    /*
+     * ZynqMP chain after enabling PL/DAP:
+     *
+     *   TAP0: PL TAP  - XCZU* - IRLEN 6
+     *   TAP1: ARM DAP - Cortex-A53 - IRLEN 4
+     *
+     * The PL TAP is the target. Selecting device 0 automatically
+     * causes Jtag::shiftIR()/shiftDR() to bypass the ARM DAP.
+     */
 
-	if (fpga_list[listDev[0]].family != "zynqmp") {
-		snprintf(mess, sizeof(mess), "ZynqMP error: first device"
-				" is not the PL TAP -> 0x%08x\n",
-				listDev[0]);
-		printError(mess);
-		return false;
-	}
+    if (family == "zynqmp_cfgn") {
+        /*
+         * PS-side chain configuration is only required when the
+         * PL/DAP TAPs are not yet visible.
+         */
+        _jtag->device_select(0);
 
-	if (listDev[1] != 0x5ba00477) {
-		snprintf(mess, sizeof(mess), "ZynqMP error: second device"
-				" is not the ARM DAP cortex A53 -> 0x%08x\n",
-				listDev[1]);
-		printError(mess);
-		return false;
-	}
+        uint16_t ircode = 0x824;
 
-	_jtag->insert_first(0xdeadbeef, 6);
-	_jtag->device_select(1);
-	_irlen = 6;
+        _jtag->shiftIR(ircode & 0xff, 8, Jtag::SHIFT_IR);
+        _jtag->shiftIR((ircode >> 8) & 0x0f, 4);
 
-	return true;
+        uint8_t instr[4] = {0x3, 0, 0, 0};
+        _jtag->shiftDR(instr, NULL, 32);
+
+        _jtag->set_state(Jtag::TEST_LOGIC_RESET);
+        _jtag->toggleClk(10);
+        _jtag->set_state(Jtag::RUN_TEST_IDLE);
+        _jtag->toggleClk(100);
+
+        _jtag->detectChain(5);
+    }
+
+    std::vector<uint32_t> listDev = _jtag->get_devices_list();
+
+    if (listDev.size() != 2) {
+        char mess[256];
+        snprintf(mess, sizeof(mess),
+                 "ZynqMP error: wrong JTAG length: %zu instead of 2\n",
+                 listDev.size());
+        printError(mess);
+        return false;
+    }
+
+    if (fpga_list[listDev[0]].family != "zynqmp") {
+        char mess[256];
+        snprintf(mess, sizeof(mess),
+                 "ZynqMP error: first device is not the PL TAP -> 0x%08x\n",
+                 listDev[0]);
+        printError(mess);
+        return false;
+    }
+
+    if (listDev[1] != 0x5ba00477) {
+        char mess[256];
+        snprintf(mess, sizeof(mess),
+                 "ZynqMP error: second device is not the ARM DAP -> 0x%08x\n",
+                 listDev[1]);
+        printError(mess);
+        return false;
+    }
+
+    /*
+     * Select the actual PL TAP.
+     *
+     * Do NOT insert a synthetic device here.
+     *
+     * device_select(0) gives:
+     *
+     *   PL  = active target, IRLEN 6
+     *   DAP = automatically bypassed, IRLEN 4
+     */
+    _jtag->device_select(0);
+    _irlen = 6;
+
+    printf("ZynqMP PL/DAP chain configured:\n");
+    printf("  device 0 = PL 0x%08x, IRLEN=6 <-- ACTIVE\n", listDev[0]);
+    printf("  device 1 = ARM DAP, IRLEN=4      <-- BYPASS\n");
+    printf("  PL IR before = 4 bits (ARM DAP BYPASS)\n");
+    printf("  PL DR before = 1 bit  (ARM DAP BYPASS)\n");
+
+    return true;
 }
 
 void Xilinx::reset()
@@ -1064,14 +1108,30 @@ void Xilinx::program_mem(ConfigBitstreamParser *bitfile)
 		* 20: Load the last bit of the JSTART instruction.   0     1   1
 		* 21: Move to the UPDATE-IR state.                   X     1   1
 		*/
-		_jtag->shiftIR(get_ircode(_ircode_map, "JSTART"), NULL, _irlen, Jtag::UPDATE_IR);
-		/*
-		* 22: Move to the RTI state and clock the
-		*     startup sequence by applying a minimum         X     0   2000
-		*     of 2000 clock cycles to the TCK.
-		*/
+		printf("Before JSTART:\n");
+		printf("  PL expected active index = 0\n");
+		printf("  PL IR length             = %d\n", _irlen);
+
+		printf("STAT before JSTART:\n");
+		read_register("STAT");
+
+		printf("COR0 before JSTART:\n");
+		read_register("COR0");
+
+		_jtag->shiftIR(get_ircode(_ircode_map, "JSTART"),
+					NULL, _irlen, Jtag::UPDATE_IR);
+
 		_jtag->set_state(Jtag::RUN_TEST_IDLE);
 		_jtag->toggleClk(2000);
+
+		printf("STAT after JSTART:\n");
+		read_register("STAT");
+
+		printf("COR0 after JSTART:\n");
+		read_register("COR0");
+
+		printf("BOOTSTS after JSTART:\n");
+		read_register("BOOTSTS");
 		/*
 		* 23: Move to the TLR state. The device is
 		* now functional.                                    X     1   3
@@ -1151,10 +1211,21 @@ static const std::map<std::string, std::list<reg_struct_t>> reg_content = {
 		REG_ENTRY("GWE",             6, 1),
 		REG_ENTRY("GHIGH B",         7, 1),
 		REG_ENTRY("MODE",            8, 3),
-		REG_ENTRY("INIT Complete",  11, 1),
-		REG_ENTRY("INIT B",         12, 1),
-		REG_ENTRY("Release Done",   13, 1),
-		REG_ENTRY("Done",           14, 1),
+		// REG_ENTRY("INIT Complete",  11, 1),
+		// REG_ENTRY("INIT B",         12, 1),
+		// REG_ENTRY("Release Done",   13, 1),
+		// REG_ENTRY("Done",           14, 1),
+        REG_ENTRY("INIT_B_INTERNAL", 11, 1,
+                {0, "Initialization not finished"},
+                {1, "Initialization finished"}),
+        REG_ENTRY("INIT_B_PIN",     12, 1),
+        REG_ENTRY("DONE_INTERNAL",  13, 1,
+                {0, "DONE internally held Low"},
+                {1, "DONE internally released"}),
+        REG_ENTRY("DONE_PIN",       14, 1,
+                {0, "DONE pin Low"},
+                {1, "DONE pin High"}),
+
 		REG_ENTRY("ID Error",       15, 1,
 			{0, "No ID error"}, {1, "ID error"}),
 		REG_ENTRY("DEC Error",      16, 1),
@@ -1164,6 +1235,9 @@ static const std::map<std::string, std::list<reg_struct_t>> reg_content = {
 		REG_ENTRY("BUS Width",      25, 2,
 			{0, "x1"}, {1, "x8"}, {2, "x16"}, {3, "x32"}),
 		REG_ENTRY("Reserved",       27, 5)
+	}},
+	{"COR0", std::list<reg_struct_t>{
+		REG_ENTRY("COR0", 0, 32),
 	}},
 	// UG470 Table 5-34
 	{"WBSTAR", std::list<reg_struct_t>{
@@ -1216,8 +1290,10 @@ static const std::map<std::string, std::list<reg_struct_t>> reg_content = {
 static const std::map<std::string, uint8_t> reg_code = {
 	{"CTRL0",   0x05},  // Control register 0
 	{"STAT",    0x07},  // Status register
-	{"CONF0",   0x09},  // Configuration Option 0
-	{"CONF1",   0x0e},  // Configuration Option 1
+	// {"CONF0",   0x09},  // Configuration Option 0
+	// {"CONF1",   0x0e},  // Configuration Option 1
+    {"COR0",    0x09},
+    {"COR1",    0x0e},
 	{"WBSTAR",  0x10},  // Warm Boot Start Address Register
 	{"BOOTSTS", 0x16},  // Boot history status register
 	{"CTRL1",   0x18},  // Control register 1

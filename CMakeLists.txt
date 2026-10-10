@@ -67,6 +67,15 @@ else()
 	set(ENABLE_LIBGPIOD OFF)
 endif()
 
+# STM32MP2 GPIO bitbang is Linux / /dev/mem based.
+if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+	option(ENABLE_STM32MP2GPIO
+		"enable STM32MP2 GPIO bitbang driver"
+		OFF)
+else()
+	set(ENABLE_STM32MP2GPIO OFF)
+endif()
+
 option(ENABLE_XILINX_PLATFORM_CABLE_USB "enable Xilinx Platform Cable USB (XPCU) support" ${ENABLE_CABLE_ALL})
 
 # XVC and RemoteBitbang are not available on Windows OS.
@@ -566,6 +575,12 @@ list(APPEND OPENFPGALOADER_SOURCE  src/jetsonNanoJtagBitbang.cpp)
 list(APPEND OPENFPGALOADER_HEADERS src/jetsonNanoJtagBitbang.hpp)
 endif()
 
+# STM32MP2 direct GPIO bitbang
+if (ENABLE_STM32MP2GPIO)
+list(APPEND OPENFPGALOADER_SOURCE  src/stm32mp2JtagBitbang.cpp)
+list(APPEND OPENFPGALOADER_HEADERS src/stm32mp2JtagBitbang.hpp)
+endif()
+
 # JLINK
 if (ENABLE_JLINK)
 list(APPEND OPENFPGALOADER_SOURCE  src/jlink.cpp)
@@ -574,8 +589,15 @@ endif()
 
 # libGPIOD support
 if (ENABLE_LIBGPIOD)
-list(APPEND OPENFPGALOADER_SOURCE  src/libgpiodJtagBitbang.cpp)
-list(APPEND OPENFPGALOADER_HEADERS src/libgpiodJtagBitbang.hpp)
+list(APPEND OPENFPGALOADER_SOURCE
+    src/libgpiodJtagBitbang.cpp
+    src/stm32mp2GpiodJtagBitbang.cpp
+)
+
+list(APPEND OPENFPGALOADER_HEADERS
+    src/libgpiodJtagBitbang.hpp
+    src/stm32mp2GpiodJtagBitbang.hpp
+)
 endif()
 
 # RemoteBitbang
@@ -766,6 +788,12 @@ if (ENABLE_JETSONNANOGPIO)
 	add_definitions(-DENABLE_JETSONNANOGPIO=1)
 	message("Jetson Nano GPIO support enabled")
 endif(ENABLE_JETSONNANOGPIO)
+
+# STM32MP2 direct GPIO bitbang 
+if (ENABLE_STM32MP2GPIO)
+	add_definitions(-DENABLE_STM32MP2GPIO=1)
+	message("STM32MP2 GPIO support enabled")
+endif(ENABLE_STM32MP2GPIO)
 
 # JLINK
 if (ENABLE_JLINK)
