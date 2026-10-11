@@ -1138,7 +1138,7 @@ void Xilinx::program_mem(ConfigBitstreamParser *bitfile)
 
 		printf("STAT after BOOTSTS read:\n");
 		read_register("STAT");
-		
+
 		/*
 		* 23: Move to the TLR state. The device is
 		* now functional.                                    X     1   3
@@ -1308,7 +1308,7 @@ static const std::map<std::string, uint8_t> reg_code = {
 
 uint32_t Xilinx::dumpRegister(std::string reg_name)
 {
-	uint8_t reg[4];
+	uint8_t reg[4] = {0, 0, 0, 0};
 	const uint8_t dummy[] = {0x00, 0x00, 0x00, 0x04};
 	/* opcode:
 	 * 0x0: NOP
@@ -1373,12 +1373,33 @@ uint32_t Xilinx::dumpRegister(std::string reg_name)
 
 	_jtag->shiftIR(get_ircode(_ircode_map, "CFG_OUT"), NULL, _irlen, Jtag::SELECT_DR_SCAN);
 	_jtag->shiftDR(dummy, reg, 32);
-	printf("  CFG_OUT bytes = %02x %02x %02x %02x\n",
+	printf("  CFG_OUT read #1 bytes = %02x %02x %02x %02x\n",
 		reg[0], reg[1], reg[2], reg[3]);
+	
+	uint8_t reg2[4] = {0, 0, 0, 0};
+    /*
+     * Diagnostic: read the same configuration register again.
+     * Do not reset the TAP between the two reads.
+     */
+    _jtag->shiftIR(get_ircode(_ircode_map, "CFG_OUT"),
+                   NULL, _irlen, Jtag::SELECT_DR_SCAN);
+    //_jtag->shiftDR(dummy, reg2, 32);
+
+    printf("  CFG_OUT read #2 bytes = %02x %02x %02x %02x\n",
+           reg2[0], reg2[1], reg2[2], reg2[3]);
+
+
 	_jtag->go_test_logic_reset();
 
 	uint32_t reg_word = char_array_to_word(reg);
+	printf("  CFG_OUT char_array_to_word = 0x%08x\n", reg_word);
 	reg_word = BitParser::reverse_32(reg_word);
+	printf("  CFG_OUT after reverse_32 = 0x%08x\n", reg_word);
+
+    uint32_t reg_word2 = char_array_to_word(reg2);
+    reg_word2 = BitParser::reverse_32(reg_word2);
+    printf("  CFG_OUT read #2 value = 0x%08x\n", reg_word2);
+
 	return reg_word;
 }
 
@@ -2549,3 +2570,4 @@ void Xilinx::select_flash_chip(xilinx_flash_chip_t flash_chip) {
 		break;
 	}
 }
+
