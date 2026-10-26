@@ -140,11 +140,14 @@ private:
 	/*
 	 * Half of one requested JTAG clock period, in nanoseconds.
 	 *
-	 * The driver uses a monotonic busy-wait between GPIO transitions so
-	 * that the requested --freq is also effective during initial chain
-	 * detection.
+	 * The driver uses monotonic timing and nanosleep() between GPIO
+	 * transitions. nanosleep() has scheduler granularity limitations at
+	 * MHz rates, so actual TCK must be measured on the hardware.
 	 */
 	uint64_t _half_period_ns;
+
+	/* CLOCK_MONOTONIC timestamp of the most recent TCK edge. */
+	uint64_t _last_tck_edge_ns;
 
 	int8_t _verbose;
 

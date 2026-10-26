@@ -156,24 +156,26 @@ static std::map<std::string, std::map<std::string, std::vector<uint8_t>>>
 			}
 		},
 		{
-			/* Xilinx Zynq UltraScale+ MPSoC / UltraScale family */
+			/* Zynq UltraScale+ MPSoC: 12-bit IR encodings confirmed from
+			 * the user's Vivado-generated SVF. Byte order is LSB first. */
 			"zynqmp",
 			{
-				{ "USER1",       {0x02} },
-				{ "USER2",       {0x03} },
-				{ "CFG_OUT",    {0x04} },
-				{ "CFG_IN",     {0x05} },
-				{ "STATUS",     {0x07} },
-				{ "USERCODE",   {0x08} },
-				{ "IDCODE",     {0x09} },
-				{ "JPROGRAM",   {0x0B} },
-				{ "JSTART",     {0x0C} },
-				{ "JSHUTDOWN", {0x0D} },
-				{ "ISC_ENABLE", {0x10} },
-				{ "ISC_PROGRAM",{0x11} },
-				{ "ISC_DISABLE",{0x16} },
-				{ "BYPASS",     {0x3F} },
-			}
+				{ "USER1",       {0x02, 0x09} },
+				{ "USER2",       {0x03, 0x09} },
+				{ "CFG_OUT",     {0x04, 0x09} },
+				{ "CFG_IN",      {0x05, 0x09} },
+				{ "STATUS",      {0x07, 0x09} },
+				{ "USERCODE",    {0x08, 0x09} },
+				{ "IDCODE",      {0x49, 0x02} },
+				{ "JPROGRAM",    {0x0B, 0x09} },
+				{ "JSTART",      {0x0C, 0x09} },
+				{ "JSHUTDOWN",   {0x0D, 0x09} },
+				{ "ISC_ENABLE",  {0x10, 0x09} },
+				{ "ISC_NOOP",    {0x14, 0x09} },
+				{ "ISC_PROGRAM", {0x11, 0x09} },
+				{ "ISC_DISABLE", {0x16, 0x09} },
+				{ "BYPASS",      {0xFF, 0x0F} },
+			} 
 		},
 		{
 			/* Xilinx Virtex UltraScale+ */
@@ -426,6 +428,7 @@ Xilinx::Xilinx(Jtag *jtag, const std::string &filename,
 		}
 		if (!zynqmp_init(family))
 			throw std::runtime_error("Error with ZynqMP init");
+		_ircode_map = ircode_mapping.at("zynqmp");
 		_fpga_family = ZYNQMP_FAMILY;
 	} else if (family == "kintex7") {
 		_fpga_family = KINTEX_FAMILY;
@@ -621,21 +624,17 @@ bool Xilinx::zynqmp_init(const std::string &family)
     }
 
     /*
-     * Select the actual PL TAP.
-     *
-     * Do NOT insert a synthetic device here.
-     *
-     * device_select(0) gives:
-     *
-     *   PL  = active target, IRLEN 6
-     *   DAP = automatically bypassed, IRLEN 4
+     * Select the actual PL TAP. The JTAG chain scanner's generic part table
+     * reports 6 bits, but the Vivado SVF for this XCZU7EV uses SIR 12.
+     * device_select(0) still uses the DAP's 4-bit bypass length for chain
+     * bookkeeping; _irlen below is the target instruction shift length.
      */
     _jtag->device_select(0);
-    _irlen = 6;
+    _irlen = 12;
 
     printf("ZynqMP PL/DAP chain configured:\n");
-    printf("  device 0 = PL 0x%08x, IRLEN=6 <-- ACTIVE\n", listDev[0]);
-    printf("  device 1 = ARM DAP, IRLEN=4      <-- BYPASS\n");
+    printf("  device 0 = PL 0x%08x, IRLEN=12 <-- ACTIVE (SVF-confirmed)\n", listDev[0]);
+    printf("  device 1 = ARM DAP, IRLEN=4       <-- BYPASS\n");
     printf("  PL IR before = 4 bits (ARM DAP BYPASS)\n");
     printf("  PL DR before = 1 bit  (ARM DAP BYPASS)\n");
 
@@ -1020,16 +1019,33 @@ void Xilinx::program_mem(ConfigBitstreamParser *bitfile)
 	 *    the TLR (Test-Logic-Reset) state.
 	 */
 	_jtag->shiftIR(get_ircode(_ircode_map, "JPROGRAM"), NULL, _irlen);
-	/* Poll INIT_B (bit 4 of IR capture) until config memory is cleared */
-	tx_buf = get_ircode(_ircode_map, "BYPASS");
-	do {
-		_jtag->shiftIR(tx_buf, rx_buf, _irlen);
-	} while (!(rx_buf[0] & 0x10));
-	/*
-	 * 8: Move into the RTI state.                        X     0   10,000(1)
-	 */
-	_jtag->set_state(Jtag::RUN_TEST_IDLE);
-	_jtag->toggleClk(10000*12);
+
+    /* Match the Vivado SVF: select ISC_NOOP, wait 100 ms, then clock
+     * 10,000 TCKs and poll the 12-bit instruction-capture response. */
+    tx_buf = get_ircode(_ircode_map, "ISC_NOOP");
+    _jtag->shiftIR(tx_buf, NULL, _irlen);
+    usleep(100000);
+    _jtag->set_state(Jtag::RUN_TEST_IDLE);
+    _jtag->toggleClk(10000);
+
+    int poll_attempts = 0;
+    uint16_t ir_capture = 0;
+    do {
+        _jtag->shiftIR(tx_buf, rx_buf, _irlen);
+        ir_capture = static_cast<uint16_t>(rx_buf[0]) |
+                     (static_cast<uint16_t>(rx_buf[1] & 0x0F) << 8);
+        if (((ir_capture & 0x0031) == 0x0011))
+            break;
+        _jtag->set_state(Jtag::RUN_TEST_IDLE);
+        if (++poll_attempts >= 100) {
+            char msg[160];
+            snprintf(msg, sizeof(msg),
+                     "ZynqMP ISC_NOOP poll timed out: IR capture=0x%03x (expected mask 0x031 -> 0x011)\n",
+                     ir_capture);
+            printError(msg);
+            throw std::runtime_error("ZynqMP JPROGRAM/ISC_NOOP polling failed");
+        }
+    } while (true);
 	/*
 	 * 9: Start loading the CFG_IN instruction,
 	 *    LSB first:                                    00101   0   5
@@ -1121,43 +1137,23 @@ void Xilinx::program_mem(ConfigBitstreamParser *bitfile)
 		_jtag->shiftIR(get_ircode(_ircode_map, "JSTART"),
 					NULL, _irlen, Jtag::UPDATE_IR);
 
-		_jtag->set_state(Jtag::RUN_TEST_IDLE);
-		_jtag->toggleClk(2000);
-
-		printf("STAT after JSTART:\n");
-		read_register("STAT");
-
-		printf("COR0 after JSTART:\n");
-		read_register("COR0");
-
-		printf("STAT after COR0 read:\n");
-		read_register("STAT");
-
-		printf("BOOTSTS after JSTART:\n");
-		read_register("BOOTSTS");
-
-		printf("STAT after BOOTSTS read:\n");
-		read_register("STAT");
-
 		/*
-		* 23: Move to the TLR state. The device is
-		* now functional.                                    X     1   3
-		*/
+		 * Match Vivado SVF post-JSTART sequence:
+		 * STATE RESET; RUNTEST 5 TCK;
+		 */
 		_jtag->go_test_logic_reset();
-		/* Some xc7s50 does not detect correct connected flash w/o this shift*/
-		_jtag->shiftIR(tx_buf, rx_buf, _irlen);
-		uint8_t ir_c = rx_buf[0] & 0x03;
-		uint8_t isc_done = ((rx_buf[0] >> 2) & 0x01);
-		uint8_t isc_ena  = ((rx_buf[0] >> 3) & 0x01);
-		uint8_t init     = ((rx_buf[0] >> 4) & 0x01);
-		uint8_t done     = ((rx_buf[0] >> 5) & 0x01);
-		printf("Shift IR %02x\n", rx_buf[0]);
-		printf("ir: %x isc_done %x isc_ena %x init %x done %x\n", ir_c, isc_done, isc_ena,
-			init, done);
+		_jtag->set_state(Jtag::RUN_TEST_IDLE);
+		// _jtag->toggleClk(2000);
+		_jtag->toggleClk(5);
 
-		if (!done) {
-			read_register("STAT");
-		}
+		/* Read STAT immediately after JSTART, before any other register access. */
+		printf("STAT immediately after JSTART:\n");
+		read_register("STAT");
+
+		/* Check whether the startup state persists after a short delay. */
+		usleep(100000);
+		printf("STAT 100 ms after JSTART:\n");
+		read_register("STAT");
 	}
 }
 
@@ -1373,21 +1369,8 @@ uint32_t Xilinx::dumpRegister(std::string reg_name)
 
 	_jtag->shiftIR(get_ircode(_ircode_map, "CFG_OUT"), NULL, _irlen, Jtag::SELECT_DR_SCAN);
 	_jtag->shiftDR(dummy, reg, 32);
-	printf("  CFG_OUT read #1 bytes = %02x %02x %02x %02x\n",
+	printf("  CFG_OUT read bytes = %02x %02x %02x %02x\n",
 		reg[0], reg[1], reg[2], reg[3]);
-	
-	uint8_t reg2[4] = {0, 0, 0, 0};
-    /*
-     * Diagnostic: read the same configuration register again.
-     * Do not reset the TAP between the two reads.
-     */
-    _jtag->shiftIR(get_ircode(_ircode_map, "CFG_OUT"),
-                   NULL, _irlen, Jtag::SELECT_DR_SCAN);
-    //_jtag->shiftDR(dummy, reg2, 32);
-
-    printf("  CFG_OUT read #2 bytes = %02x %02x %02x %02x\n",
-           reg2[0], reg2[1], reg2[2], reg2[3]);
-
 
 	_jtag->go_test_logic_reset();
 
@@ -1395,10 +1378,6 @@ uint32_t Xilinx::dumpRegister(std::string reg_name)
 	printf("  CFG_OUT char_array_to_word = 0x%08x\n", reg_word);
 	reg_word = BitParser::reverse_32(reg_word);
 	printf("  CFG_OUT after reverse_32 = 0x%08x\n", reg_word);
-
-    uint32_t reg_word2 = char_array_to_word(reg2);
-    reg_word2 = BitParser::reverse_32(reg_word2);
-    printf("  CFG_OUT read #2 value = 0x%08x\n", reg_word2);
 
 	return reg_word;
 }

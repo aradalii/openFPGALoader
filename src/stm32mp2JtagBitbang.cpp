@@ -73,6 +73,7 @@ Stm32mp2JtagBitbang::Stm32mp2JtagBitbang(
 	_curr_tdi(0),
 	_clkHZ(0),
 	_half_period_ns(0),
+	_last_tck_edge_ns(0),
 	_verbose(verbose > 1)
 {
 	const long pagesize = sysconf(_SC_PAGESIZE);
@@ -177,7 +178,14 @@ Stm32mp2JtagBitbang::Stm32mp2JtagBitbang(
 		if (setClkFreq(clkHZ) != 0)
 			throw std::runtime_error("Unable to configure JTAG frequency");
 
-		display("STM32MP2 JTAG frequency: requested %u Hz\n", _clkHZ);
+		/*
+		 * This is the requested timing target, not a measurement of the
+		 * physical TCK frequency. Userspace GPIO writes and clock_gettime()
+		 * overhead can make the actual frequency lower, especially at high
+		 * requested rates. Verify TCK with an oscilloscope/logic analyzer.
+		 */
+		display("STM32MP2 JTAG frequency target: %u Hz "
+		        "(actual TCK may be lower)\n", _clkHZ);
 	} catch (...) {
 		if (_tck_map != nullptr)
 			munmap(_tck_map, _map_size);
@@ -352,32 +360,14 @@ int Stm32mp2JtagBitbang::get_gpio(
 
 void Stm32mp2JtagBitbang::wait_half_period()
 {
-	if (_half_period_ns == 0)
-		return;
-
-	struct timespec start;
-	struct timespec now;
-
-	if (clock_gettime(CLOCK_MONOTONIC, &start) != 0)
-		return;
-
-	const uint64_t start_ns =
-		static_cast<uint64_t>(start.tv_sec) * 1000000000ULL +
-		static_cast<uint64_t>(start.tv_nsec);
-
-	const uint64_t target_ns = start_ns + _half_period_ns;
-
-	do {
-		if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
-			return;
-
-		const uint64_t now_ns =
-			static_cast<uint64_t>(now.tv_sec) * 1000000000ULL +
-			static_cast<uint64_t>(now.tv_nsec);
-
-		if (now_ns >= target_ns)
-			break;
-	} while (true);
+	/* TODO:
+	* add more or little nop here for up and down jtag tclk frequency
+	* based on your processor speed and PCB trace route and keep it under 5MHz for safety
+	*/
+	volatile int nop_delay;
+	for (nop_delay = 0; nop_delay < 12; nop_delay++) {
+		asm volatile("nop");
+	}
 }
 
 int Stm32mp2JtagBitbang::setClkFreq(uint32_t clkHZ)
@@ -420,8 +410,19 @@ int Stm32mp2JtagBitbang::update_pins(
 	if (tms != _curr_tms)
 		set_gpio(_tms_port, TMS_PIN, tms != 0);
 
-	if (tck != _curr_tck)
+	if (tck != _curr_tck) {
+
+		// struct timespec edge_time;
+		// const bool have_timestamp = clock_gettime(CLOCK_MONOTONIC, &edge_time) == 0;
+
 		set_gpio(_tck_port, TCK_PIN, tck != 0);
+
+		// if (have_timestamp) {
+		// 	_last_tck_edge_ns =
+		// 		static_cast<uint64_t>(edge_time.tv_sec) * 1000000000ULL +
+		// 		static_cast<uint64_t>(edge_time.tv_nsec);
+		// }
+	}
 
 	_curr_tdi = tdi;
 	_curr_tms = tms;
